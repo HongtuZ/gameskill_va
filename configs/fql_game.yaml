@@ -96,7 +96,7 @@ optimizer:
 
 training:
   total_steps: 100000        # Ignored when epochs is set; epochs wins.
-  epochs: 10000                # Optional; full passes over the transition dataset.
+  epochs: 100                # Optional; full passes over the transition dataset.
   gradient_accumulation_steps: 1
   max_grad_norm: 10.0
   amp: false
