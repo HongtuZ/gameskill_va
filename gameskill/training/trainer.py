@@ -272,6 +272,7 @@ def _train(config: dict[str, Any], context: DistributedContext) -> None:
         codec,
         config["data"],
         config["model"],
+        config["audio"],
     )
 
     gpu_dataset = _uses_gpu_dataset(config, transitions)

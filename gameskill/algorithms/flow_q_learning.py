@@ -15,7 +15,7 @@ from gameskill.models.vision import VisionStateEncoder
 
 
 class FlowQLearning(nn.Module):
-    """FQL with a shared temporal DINOv2 observation encoder.
+    """FQL with a shared temporal DINOv3 + EAT fusion encoder.
 
     The loss matches the official algorithm: twin TD critics, behavior-cloning
     flow matching, Euler-flow distillation into a one-step actor, and a
@@ -75,11 +75,15 @@ class FlowQLearning(nn.Module):
     def sample_actions_from_states(self, states: Tensor, noises: Tensor) -> Tensor:
         return self.actor_onestep_flow(states, noises).clamp(-1.0, 1.0)
 
-    def encode(self, observations: Tensor) -> Tensor:
-        return self.state_encoder(observations)
+    def encode(self, observations: Tensor, audio_features: Tensor | None = None) -> Tensor:
+        return self.state_encoder(observations, audio_features)
 
-    def act(self, observations: Tensor, noises: Tensor) -> Tensor:
-        return self.sample_actions_from_states(self.encode(observations), noises)
+    def act(
+        self, observations: Tensor, audio_features: Tensor | None, noises: Tensor
+    ) -> Tensor:
+        return self.sample_actions_from_states(
+            self.encode(observations, audio_features), noises
+        )
 
     def train(self, mode: bool = True) -> FlowQLearning:
         super().train(mode)
@@ -98,9 +102,11 @@ class FlowQLearning(nn.Module):
         masks = batch["masks"]
         batch_size = observations.shape[0]
 
-        states = self.state_encoder(observations)
+        states = self.state_encoder(observations, batch.get("audio_observations"))
         with torch.no_grad():
-            next_states = self.state_encoder(batch["next_observations"])
+            next_states = self.state_encoder(
+                batch["next_observations"], batch.get("next_audio_observations")
+            )
             next_noises = torch.randn(
                 batch_size,
                 self.action_dim,

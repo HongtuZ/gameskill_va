@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cache concatenated whole-frame and center-crop DINOv2 features."""
+"""Cache dual-view DINOv3 and aligned 3-second EAT audio features."""
 
 from __future__ import annotations
 
@@ -23,9 +23,15 @@ def parse_args() -> argparse.Namespace:
         "--batch-size",
         type=int,
         default=8,
-        help="Source frames per batch; DINOv2 receives twice this many views.",
+        help="Source frames per batch; DINOv3 receives twice this many views.",
     )
     parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument(
+        "--audio-batch-size",
+        type=int,
+        default=None,
+        help="Audio windows per EAT batch; defaults to audio.precompute_batch_size.",
+    )
     parser.add_argument("--device", default="auto", help="auto, cuda, mps, or cpu")
     parser.add_argument("--no-amp", action="store_true")
     parser.add_argument(
@@ -46,12 +52,15 @@ def main() -> None:
     args = parse_args()
     if args.batch_size <= 0 or args.num_workers < 0:
         raise ValueError("batch-size must be positive and num-workers non-negative")
+    if args.audio_batch_size is not None and args.audio_batch_size <= 0:
+        raise ValueError("audio-batch-size must be positive")
     if args.max_frames is not None and args.max_frames <= 0:
         raise ValueError("max-frames must be positive")
     path = precompute_features(
         load_config(args.config, args.overrides),
         output_path=args.output,
         batch_size=args.batch_size,
+        audio_batch_size=args.audio_batch_size,
         num_workers=args.num_workers,
         device=args.device,
         amp=not args.no_amp,

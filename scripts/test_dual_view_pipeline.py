@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke-test dual-view preprocessing, parallel DINOv2, and policy heads."""
+"""Smoke-test dual-view preprocessing, audio fusion, and policy heads."""
 
 from __future__ import annotations
 
@@ -51,11 +51,15 @@ def main() -> None:
     concatenated = per_view_features.reshape(1, 1, -1).cpu()
     policy = GameSkillVisionPolicy(config["model"]).eval()
     sequence = concatenated.repeat(1, int(config["data"]["sequence_length"]), 1)
-    mouse, keyboard_logits = policy(sequence)
+    # Zero here means a test embedding, not a special missing-audio flag. During
+    # real precomputation even a silent waveform is passed through EAT.
+    audio_features = torch.zeros(1, int(config["model"]["audio_feature_dim"]))
+    mouse, keyboard_logits = policy(sequence, audio_features)
     print(f"source_size={source_size}")
     print(f"dual_views={tuple(views.shape)}")
-    print(f"single_dinov2_batch={tuple(per_view_features.shape)}")
+    print(f"single_dinov3_batch={tuple(per_view_features.shape)}")
     print(f"concatenated_features={tuple(concatenated.shape)}")
+    print(f"audio_features={tuple(audio_features.shape)}")
     print(f"mouse_policy={tuple(mouse.shape)}")
     print(f"keyboard_policy={tuple(keyboard_logits.shape)}")
 

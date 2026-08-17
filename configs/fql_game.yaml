@@ -14,7 +14,7 @@ data:
   # cached-feature path only.
   gpu_dataset: true
   max_samples: null          # Optional subset for debugging.
-  feature_cache_path: dataset/cache/dinov2_dual_view_features.pt
+  feature_cache_path: dataset/cache/dinov3_eat_multimodal_features.pt
   # Batch size and loader workers used when rank 0 builds the feature cache.
   precompute_batch_size: 128
   precompute_num_workers: 8
@@ -33,19 +33,44 @@ data:
   mouse_scale_quantile: 0.995
   minimum_mouse_scale: 1.0
 
+audio:
+  enabled: true
+  # audio.mka is decoded once to this 16 kHz mono FLAC before precomputation.
+  source_path: audio.mka
+  resampled_path: dataset/train/audio/audio_16k_mono.flac
+  alignment_metadata: audio_meta.json
+  encoder_name: worstchan/EAT-base_epoch30_finetune_AS2M
+  # Pin the reviewed/tested custom-code snapshot instead of tracking main.
+  revision: 60d61e8b2e9e5ba3be6860285de80cb7d625ccbb
+  trust_remote_code: true
+  feature_dim: 768
+  sample_rate: 16000
+  context_seconds: 3.0
+  window_samples: 48000
+  mel_bins: 128
+  # A 3 s fbank has 298 frames; padding to 304 keeps time divisible by EAT's
+  # patch size 16 without introducing a large unused 10 s tail.
+  mel_target_length: 304
+  norm_mean: -4.268
+  norm_std: 4.569
+  precompute_batch_size: 32
+
 model:
-  vision_encoder_name: vit_small_patch14_dinov2.lvd142m
+  vision_encoder_name: vit_small_patch16_dinov3.lvd1689m
   pretrained: true
   freeze_vision_encoder: true
   use_precomputed_features: true
+  use_audio: true
   vision_feature_dim: 384
   num_views: 2
-  # View 0: resize the complete frame to 518x518.
+  # View 0: resize the complete frame to DINOv3's 256x256 input.
   # View 1: crop a centered square whose side is 75% of the shorter edge,
-  #         then resize it to 518x518.
+  #         then resize it to 256x256.
   center_crop_scale: 0.75
   temporal_hidden_dim: 384
   temporal_num_layers: 1
+  audio_feature_dim: 768
+  audio_hidden_dim: 256
   state_dim: 384
   dropout: 0.1
   actor_hidden_dims: [512, 512, 512, 512]

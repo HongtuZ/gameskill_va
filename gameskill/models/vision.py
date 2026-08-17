@@ -1,4 +1,4 @@
-"""Dual-view DINOv2 temporal vision state encoder."""
+"""Dual-view DINOv3 temporal encoder with frozen EAT feature fusion."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ def create_vision_backbone(
 class DualViewTransform:
     """Create a whole-frame view and a centered local view.
 
-    Both views are resized to the DINOv2 input size. The whole-frame resize is
+    Both views are resized to the DINOv3 input size. The whole-frame resize is
     deliberately non-aspect-preserving so that no source pixels are discarded.
     """
 
@@ -102,6 +102,7 @@ class VisionStateEncoder(nn.Module):
                 )
         self.vision_feature_dim = vision_dim
         self.frame_feature_dim = vision_dim * self.num_views
+        self.use_audio = bool(config.get("use_audio", True))
         temporal_dim = int(config["temporal_hidden_dim"] or vision_dim)
         temporal_layers = int(config["temporal_num_layers"])
         dropout = float(config["dropout"])
@@ -118,6 +119,24 @@ class VisionStateEncoder(nn.Module):
             nn.GELU(),
             nn.LayerNorm(int(config["state_dim"])),
         )
+        if self.use_audio:
+            self.audio_feature_dim = int(config["audio_feature_dim"])
+            audio_hidden_dim = int(config["audio_hidden_dim"])
+            self.audio_projection = nn.Sequential(
+                nn.LayerNorm(self.audio_feature_dim),
+                nn.Linear(self.audio_feature_dim, audio_hidden_dim),
+                nn.GELU(),
+                nn.LayerNorm(audio_hidden_dim),
+            )
+            self.fusion = nn.Sequential(
+                nn.Linear(int(config["state_dim"]) + audio_hidden_dim, int(config["state_dim"])),
+                nn.GELU(),
+                nn.LayerNorm(int(config["state_dim"])),
+            )
+        else:
+            self.audio_feature_dim = 0
+            self.audio_projection = None
+            self.fusion = None
         if self.vision_encoder is not None:
             self.set_vision_trainable(not bool(config["freeze_vision_encoder"]))
 
@@ -148,7 +167,7 @@ class VisionStateEncoder(nn.Module):
     def get_dual_view_transform(self) -> DualViewTransform:
         if self.vision_encoder is None:
             raise RuntimeError(
-                "the DINOv2 backbone is omitted in precomputed-feature mode"
+                "the DINOv3 backbone is omitted in precomputed-feature mode"
             )
         return build_dual_view_transform(
             self.vision_encoder, self.center_crop_scale
@@ -156,7 +175,7 @@ class VisionStateEncoder(nn.Module):
 
     def encode_frame_views(self, images: Tensor) -> Tensor:
         if self.vision_encoder is None:
-            raise RuntimeError("cannot encode pixels without a DINOv2 backbone")
+            raise RuntimeError("cannot encode pixels without a DINOv3 backbone")
         if images.ndim != 6:
             raise ValueError(
                 "dual-view images must be [B,T,V,C,H,W], "
@@ -167,7 +186,7 @@ class VisionStateEncoder(nn.Module):
             raise ValueError(
                 f"expected at least one RGB frame with {self.num_views} views"
             )
-        # All whole-frame and center-crop views share one DINOv2 call. On GPU,
+        # All whole-frame and center-crop views share one DINOv3 call. On GPU,
         # this executes as a single parallel batch rather than two serial passes.
         flattened = images.reshape(batch * steps * views, channels, height, width)
         if self._vision_frozen:
@@ -177,7 +196,9 @@ class VisionStateEncoder(nn.Module):
             features = self.vision_encoder(flattened)
         return features.reshape(batch, steps, views * self.vision_feature_dim)
 
-    def forward(self, observations: Tensor) -> Tensor:
+    def forward(
+        self, observations: Tensor, audio_features: Tensor | None = None
+    ) -> Tensor:
         if observations.ndim == 2:
             observations = observations.unsqueeze(1)
         if observations.ndim == 3:
@@ -201,7 +222,21 @@ class VisionStateEncoder(nn.Module):
             self.temporal_encoder.hidden_size,
         )
         temporal_features, _ = self.temporal_encoder(frame_features, initial_state)
-        return self.projection(temporal_features[:, -1])
+        visual_state = self.projection(temporal_features[:, -1])
+        if not self.use_audio:
+            return visual_state
+        if audio_features is None:
+            raise ValueError("audio_features are required when model.use_audio=true")
+        if audio_features.ndim != 2 or audio_features.shape != (
+            batch, self.audio_feature_dim
+        ):
+            raise ValueError(
+                f"audio_features must be [B,{self.audio_feature_dim}], got "
+                f"{tuple(audio_features.shape)}"
+            )
+        assert self.audio_projection is not None and self.fusion is not None
+        audio_state = self.audio_projection(audio_features)
+        return self.fusion(torch.cat((visual_state, audio_state), dim=-1))
 
 
 __all__ = [

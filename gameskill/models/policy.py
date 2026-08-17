@@ -11,7 +11,7 @@ from gameskill.models.vision import VisionStateEncoder
 
 
 class GameSkillVisionPolicy(nn.Module):
-    """DINOv2/feature-cache policy with separate mouse and keyboard heads.
+    """DINOv3 + EAT feature-fusion policy with separate action heads.
 
     This class is useful for supervised policy evaluation and inference. The
     FQL trainer uses the same :class:`VisionStateEncoder`; its one-step actor
@@ -33,15 +33,19 @@ class GameSkillVisionPolicy(nn.Module):
         self.mouse_policy = nn.Linear(current_dim, MOUSE_ACTION_DIM)
         self.keyboard_policy = nn.Linear(current_dim, len(DEFAULT_KEYBOARD_ACTIONS))
 
-    def forward(self, observations: Tensor) -> tuple[Tensor, Tensor]:
-        states = self.vision_encoder(observations)
+    def forward(
+        self, observations: Tensor, audio_features: Tensor | None = None
+    ) -> tuple[Tensor, Tensor]:
+        states = self.vision_encoder(observations, audio_features)
         hidden = self.policy_trunk(states)
         mouse_actions = self.mouse_policy(hidden).tanh()
         keyboard_logits = self.keyboard_policy(hidden)
         return mouse_actions, keyboard_logits
 
-    def predict(self, observations: Tensor) -> tuple[Tensor, Tensor]:
-        mouse_actions, keyboard_logits = self(observations)
+    def predict(
+        self, observations: Tensor, audio_features: Tensor | None = None
+    ) -> tuple[Tensor, Tensor]:
+        mouse_actions, keyboard_logits = self(observations, audio_features)
         return mouse_actions, keyboard_logits.sigmoid()
 
 

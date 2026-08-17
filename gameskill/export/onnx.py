@@ -24,8 +24,10 @@ class OnnxGameSkillPolicy(nn.Module):
         self.register_buffer("mouse_center", codec.mouse_center.float())
         self.register_buffer("mouse_scale", codec.mouse_scale.float())
 
-    def forward(self, images: Tensor, noises: Tensor) -> tuple[Tensor, Tensor]:
-        states = self.state_encoder(images)
+    def forward(
+        self, images: Tensor, audio_features: Tensor, noises: Tensor
+    ) -> tuple[Tensor, Tensor]:
+        states = self.state_encoder(images, audio_features)
         normalized_actions = self.actor(states, noises).clamp(-1.0, 1.0)
         mouse_move = normalized_actions[:, :2] * self.mouse_scale + self.mouse_center
         keyboard_probabilities = (
@@ -49,15 +51,15 @@ def export_onnx_policy(
     model_config = deepcopy(config["model"])
     cached_checkpoint = bool(model_config.get("use_precomputed_features", False))
     # Deployment accepts pixels, so a cache-trained temporal policy must have
-    # the locally cached frozen DINOv2 backbone attached again for export.
+    # the locally cached frozen DINOv3 backbone attached again for export.
     model_config["use_precomputed_features"] = False
     if not cached_checkpoint:
-        # Pixel-trained checkpoints already contain every DINOv2 parameter.
+        # Pixel-trained checkpoints already contain every DINOv3 parameter.
         model_config["pretrained"] = False
     elif not bool(model_config.get("pretrained", False)):
         raise ValueError(
             "a feature-cache checkpoint needs model.pretrained=true so the frozen "
-            "DINOv2 weights can be reattached during ONNX export"
+            "DINOv3 weights can be reattached during ONNX export"
         )
     agent = FlowQLearning(model_config, config["algorithm"])
     incompatible = agent.load_state_dict(checkpoint["model"], strict=False)
@@ -87,18 +89,22 @@ def export_onnx_policy(
         dtype=torch.float32,
     )
     noises = torch.zeros(batch_size, agent.action_dim, dtype=torch.float32)
+    audio_features = torch.zeros(
+        batch_size, int(model_config["audio_feature_dim"]), dtype=torch.float32
+    )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with torch.no_grad():
-        reference_outputs = wrapper(images, noises)
+        reference_outputs = wrapper(images, audio_features, noises)
     torch.onnx.export(
         wrapper,
-        (images, noises),
+        (images, audio_features, noises),
         output_path,
-        input_names=["images", "noises"],
+        input_names=["images", "audio_features", "noises"],
         output_names=["mouse_move", "keyboard_probabilities"],
         dynamic_axes={
             "images": {0: "batch"},
+            "audio_features": {0: "batch"},
             "noises": {0: "batch"},
             "mouse_move": {0: "batch"},
             "keyboard_probabilities": {0: "batch"},
@@ -109,13 +115,16 @@ def export_onnx_policy(
     )
 
     if verify:
-        _verify_onnx(output_path, images, noises, reference_outputs)
+        _verify_onnx(
+            output_path, images, audio_features, noises, reference_outputs
+        )
     return output_path
 
 
 def _verify_onnx(
     output_path: Path,
     images: Tensor,
+    audio_features: Tensor,
     noises: Tensor,
     reference_outputs: tuple[Tensor, Tensor],
 ) -> None:
@@ -127,22 +136,26 @@ def _verify_onnx(
     session = ort.InferenceSession(
         str(output_path), providers=["CPUExecutionProvider"]
     )
-    test_cases = [(images, noises, reference_outputs)]
+    test_cases = [(images, audio_features, noises, reference_outputs)]
     if images.shape[0] == 1:
         batch_two_images = images.repeat(2, 1, 1, 1, 1, 1)
         batch_two_noises = noises.repeat(2, 1)
+        batch_two_audio = audio_features.repeat(2, 1)
         with torch.no_grad():
             batch_two_outputs = (
                 torch.from_numpy(reference_outputs[0].detach().numpy()).repeat(2, 1),
                 torch.from_numpy(reference_outputs[1].detach().numpy()).repeat(2, 1),
             )
-        test_cases.append((batch_two_images, batch_two_noises, batch_two_outputs))
+        test_cases.append(
+            (batch_two_images, batch_two_audio, batch_two_noises, batch_two_outputs)
+        )
 
-    for case_images, case_noises, expected_outputs in test_cases:
+    for case_images, case_audio, case_noises, expected_outputs in test_cases:
         actual_outputs = session.run(
             None,
             {
                 "images": case_images.numpy(),
+                "audio_features": case_audio.numpy(),
                 "noises": case_noises.numpy(),
             },
         )

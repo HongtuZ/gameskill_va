@@ -46,12 +46,15 @@ def apply_override(config: dict[str, Any], override: str) -> None:
 
 
 def validate_config(config: dict[str, Any]) -> None:
-    sections = {"data", "model", "algorithm", "optimizer", "training", "logging"}
+    sections = {
+        "data", "audio", "model", "algorithm", "optimizer", "training", "logging"
+    }
     missing = sections.difference(config)
     if missing:
         raise ConfigError(f"missing configuration sections: {sorted(missing)}")
 
     data = config["data"]
+    audio = config["audio"]
     model = config["model"]
     algorithm = config["algorithm"]
     training = config["training"]
@@ -75,6 +78,29 @@ def validate_config(config: dict[str, Any]) -> None:
     _positive(model, "vision_feature_dim")
     _positive(model, "num_views")
     _positive(model, "temporal_num_layers")
+    if bool(audio.get("enabled", False)):
+        for key in (
+            "feature_dim", "sample_rate", "context_seconds", "window_samples",
+            "mel_bins", "mel_target_length", "norm_std", "precompute_batch_size",
+        ):
+            _positive(audio, key)
+        _positive(model, "audio_feature_dim")
+        _positive(model, "audio_hidden_dim")
+        expected_window = round(
+            float(audio["sample_rate"]) * float(audio["context_seconds"])
+        )
+        if int(audio["window_samples"]) != expected_window:
+            raise ConfigError(
+                "audio.window_samples must equal sample_rate * context_seconds"
+            )
+        if int(model["audio_feature_dim"]) != int(audio["feature_dim"]):
+            raise ConfigError(
+                "model.audio_feature_dim must equal audio.feature_dim"
+            )
+        if not bool(model.get("use_audio", False)):
+            raise ConfigError("audio.enabled=true requires model.use_audio=true")
+    elif bool(model.get("use_audio", False)):
+        raise ConfigError("model.use_audio=true requires audio.enabled=true")
     _positive(algorithm, "flow_steps")
     _positive(training, "total_steps")
     if training.get("epochs") is not None:
@@ -103,6 +129,12 @@ def validate_config(config: dict[str, Any]) -> None:
     ):
         raise ConfigError(
             "precomputed features require model.freeze_vision_encoder=true"
+        )
+    if bool(audio.get("enabled", False)) and not bool(
+        model["use_precomputed_features"]
+    ):
+        raise ConfigError(
+            "frozen EAT audio requires model.use_precomputed_features=true"
         )
     if int(model["num_views"]) != 2:
         raise ConfigError("this policy currently requires model.num_views=2")

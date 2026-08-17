@@ -176,6 +176,13 @@ class CachedFeatureTransitionDataset(_TransitionDatasetBase):
             .view(count, sequence_length, -1)
         )
 
+        if "frame_index" not in dataset.column_names:
+            raise ValueError("dataset is missing frame_index required by the audio cache")
+        audio_frame_indices = [int(value) for value in dataset["frame_index"]]
+        self._audio_observations = self.feature_cache.get_audio_features(
+            audio_frame_indices
+        )
+
         columns = ["mouse_move", "segment_id", *self.action_codec.keyboard_actions]
         if self.reward_column in dataset.column_names:
             columns.append(self.reward_column)
@@ -224,15 +231,18 @@ class CachedFeatureTransitionDataset(_TransitionDatasetBase):
         next_index = index if bool(self._masks[index] == 0.0) else index + 1
         return {
             "observations": self._observations[index],
+            "audio_observations": self._audio_observations[index],
             "actions": self._actions[index],
             "rewards": self._rewards[index],
             "next_observations": self._observations[next_index],
+            "next_audio_observations": self._audio_observations[next_index],
             "masks": self._masks[index],
         }
 
     def to(self, device: torch.device) -> "CachedFeatureTransitionDataset":
         """Move every materialized tensor to ``device`` for GPU-resident training."""
         self._observations = self._observations.to(device)
+        self._audio_observations = self._audio_observations.to(device)
         self._actions = self._actions.to(device)
         self._rewards = self._rewards.to(device)
         self._masks = self._masks.to(device)
@@ -243,9 +253,11 @@ class CachedFeatureTransitionDataset(_TransitionDatasetBase):
         next_indices = torch.where(self._masks[indices] == 0.0, indices, indices + 1)
         return {
             "observations": self._observations[indices],
+            "audio_observations": self._audio_observations[indices],
             "actions": self._actions[indices],
             "rewards": self._rewards[indices],
             "next_observations": self._observations[next_indices],
+            "next_audio_observations": self._audio_observations[next_indices],
             "masks": self._masks[indices],
         }
 
@@ -299,6 +311,7 @@ def build_transition_dataset(
     action_codec: HybridActionCodec,
     data_config: dict[str, Any],
     model_config: dict[str, Any],
+    audio_config: dict[str, Any],
 ) -> _TransitionDatasetBase:
     common = {
         "action_codec": action_codec,
@@ -313,6 +326,7 @@ def build_transition_dataset(
     if bool(model_config["use_precomputed_features"]):
         cache = load_feature_cache(data_config["feature_cache_path"])
         cache.validate_model_config(model_config)
+        cache.validate_audio_config(audio_config, model_config)
         sequences = load_filename_sequences(data_config, len(dataset))
         return CachedFeatureTransitionDataset(
             dataset=dataset,
@@ -320,6 +334,11 @@ def build_transition_dataset(
             feature_cache=cache,
             sequence_length=sequence_length,
             **common,
+        )
+    if bool(audio_config.get("enabled", False)):
+        raise ValueError(
+            "audio training currently requires model.use_precomputed_features=true "
+            "because the frozen EAT encoder is intentionally kept out of the trainer"
         )
     if image_transform is None:
         raise ValueError("image_transform is required for pixel-backed training")
