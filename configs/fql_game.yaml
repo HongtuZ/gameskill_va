@@ -1,0 +1,86 @@
+# GameSkill Flow Q-Learning configuration.
+seed: 7
+
+data:
+  path: dataset
+  split: train
+  cache_dir: null
+  train_batch_size: 4096      # Action-training batch size per rank; independent
+                             # of precompute_batch_size below.
+  sequence_length: 10
+  num_workers: 8
+  # Keep the materialized transition tensors on GPU and sample via on-device
+  # gather, skipping the DataLoader. Needs ~0.7GB VRAM for this dataset; the
+  # cached-feature path only.
+  gpu_dataset: true
+  max_samples: null          # Optional subset for debugging.
+  feature_cache_path: dataset/cache/dinov2_dual_view_features.pt
+  # Batch size and loader workers used when rank 0 builds the feature cache.
+  precompute_batch_size: 128
+  precompute_num_workers: 8
+
+  # FQL requires a real scalar reward in every metadata.jsonl row. Formal
+  # training fails clearly if this field is absent. Only reward-free code-path
+  # smoke tests should override allow_missing_reward to true.
+  reward_column: reward
+  done_column: done          # Optional; segment boundaries are always terminal.
+  allow_missing_reward: false
+  missing_reward_value: 0.0
+  reward_scale: 1.0
+  reward_bias: 0.0
+
+  # Robustly maps mouse dx/dy into FQL's bounded [-1, 1] action space.
+  mouse_scale_quantile: 0.995
+  minimum_mouse_scale: 1.0
+
+model:
+  vision_encoder_name: vit_small_patch14_dinov2.lvd142m
+  pretrained: true
+  freeze_vision_encoder: true
+  use_precomputed_features: true
+  vision_feature_dim: 384
+  num_views: 2
+  # View 0: resize the complete frame to 518x518.
+  # View 1: crop a centered square whose side is 75% of the shorter edge,
+  #         then resize it to 518x518.
+  center_crop_scale: 0.75
+  temporal_hidden_dim: 384
+  temporal_num_layers: 1
+  state_dim: 384
+  dropout: 0.1
+  actor_hidden_dims: [512, 512, 512, 512]
+  critic_hidden_dims: [512, 512, 512, 512]
+  actor_layer_norm: false
+  critic_layer_norm: true
+
+algorithm:
+  discount: 0.99
+  tau: 0.005
+  alpha: 1.0                 # Tune from [0.03, 0.1, 0.3, 1, 3, 10].
+  flow_steps: 10
+  q_aggregation: mean
+  normalize_q_loss: true
+  critic_loss_weight: 1.0
+
+optimizer:
+  learning_rate: 0.0003
+  vision_learning_rate: 0.00001
+  weight_decay: 0.0001
+  betas: [0.9, 0.999]
+  warmup_steps: 1000
+
+training:
+  total_steps: 100000        # Ignored when epochs is set; epochs wins.
+  epochs: 10000                # Optional; full passes over the transition dataset.
+  gradient_accumulation_steps: 1
+  max_grad_norm: 10.0
+  amp: false
+  device: auto
+  output_dir: checkpoints/fql_game
+  save_every: 5000
+  no_save: false
+  resume: null
+
+logging:
+  log_every: 10
+  tensorboard_dir: null      # Defaults to <training.output_dir>/tensorboard.
